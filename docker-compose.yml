@@ -1,0 +1,111 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: vortex-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: vortex-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://127.0.0.1:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    depends_on:
+      - zookeeper
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: vortex-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  producer:
+    build: .
+    container_name: vortex-producer
+    command: python producer/hackernews_producer.py
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      - kafka
+    restart: unless-stopped
+
+  consumer:
+    build: .
+    container_name: vortex-consumer
+    command: python consumer/validated_consumer.py
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      - kafka
+    restart: unless-stopped
+
+  bronze-writer:
+    build: .
+    container_name: vortex-bronze-writer
+    command: python storage/bronze_writer.py
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      - kafka
+    restart: unless-stopped
+
+  orchestrator:
+    build: .
+    container_name: vortex-orchestrator
+    command: python orchestration/vortex_flow.py serve
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    container_name: vortex-dashboard
+    command: streamlit run dashboard/app.py --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      - kafka
+      - qdrant
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  kafka_data:
+  zookeeper_data:
+  zookeeper_log:
